@@ -1,29 +1,22 @@
-# OpenFedLLM: Training Large Language Models on Decentralized Private Data via Federated Learning
+# Leveraging Federated Learning for Multilingual and Private Language Models via Model Clustering
 
-**OpenFedLLM** is an open-source research-use codebase for training *Large Language Models (LLM)* via federated learning. Please check our [paper](https://arxiv.org/abs/2402.06954) for details and the corresponding empirical study.
+*Abstract:*
+Large Language Models (LLMs) have been increasingly applied across diverse applications worldwide and serve users from numerous countries spanning a wide variety of languages. However, the state-of-the-art models have a performance gap in several languages, mainly in the low-resource ones. This happens due to the difficulty in obtaining high-quality in-domain data from these languages that are poorly represented on today's open datasets. 
+Thus, this paper proposes FedMLLM, a Federated Learning (FL) approach that allows access to more data by distributed training of the language model. Additionally, to avoid harm in performance due to aggregating several divert domains, FedMLLM applies a fully unsupervised model clustering, increasing the specialization while maintaining client collaboration. Performance evaluation results demonstrate that FedMLLM consistently outperforms traditional FL baselines in various multilingual and heterogeneous settings. This poses a way to leverage collaboration between users from several nations while increasing the quality of language models across under-represented languages.
 
-OpenFedLLM includes the following key features:
-- 7 **federated learning** algorithms (e.g., *FedAvg*, *FedProx*, *SCAFFOLD*, *FedAvgM*, etc.).
-- 2 **LLM training** algorithms, including instruction tuning (i.e. *SFT*) and value alignment (i.e., *DPO*).
-- 30+ **evaluation metrics** covering *general capabilities*, *medical QA*, *financial QA*, *code generation*, *math solving*, and more.
+![intro](doc/assets/multilingual.drawio.png)
 
 
-![intro](doc/assets/openfedllm-intro.png)
-
-## News🔥
-- **2024-06:** We released the first realistic benchmark for FedLLM: FedLLM-Bench. Check the [Paper](https://arxiv.org/pdf/2406.04845) | [Code](https://github.com/rui-ye/FedLLM-Bench).
+*Obs: Code adapted from **OpenFedLLM**: a open-source research-use codebase for training *Large Language Models (LLM)* via federated learning. Please check our [paper](https://arxiv.org/abs/2402.06954) for details*
 
 ## Setup
 
 Clone the repo, submodules and install the required packages.
 
 ```
-git clone --recursive --shallow-submodules https://github.com/rui-ye/OpenFedLLM.git
-cd OpenFedLLM
-conda create -n fedllm python=3.10
-conda activate fedllm
+git clone https://github.com/GabrielTalasso/FL-LLM-AD.git
+cd FedMLLM
 pip install -r requirements.txt
-source setup.sh
 ```
 
 ## Training
@@ -32,28 +25,7 @@ We provide training scripts under `training_scripts/`. Try them out from the top
 
 ### Federated Instruction Tuning
 
-The training script is in `training_scripts/run_sft.sh`.
-
-```
-CUDA_VISIBLE_DEVICES=1 python main_sft.py \
- --model_name_or_path "meta-llama/Llama-2-7b-hf" \
- --dataset_name "vicgalle/alpaca-gpt4" \
- --dataset_sample 20000 \
- --fed_alg "fedavg" \
- --num_clients 20 \
- --sample_clients 2 \
- --max_steps 10 \
- --num_rounds 200 \
- --batch_size 16 \
- --gradient_accumulation_steps 1 \
- --seq_length 512 \
- --peft_lora_r 32 \
- --peft_lora_alpha 64 \
- --use_peft \
- --load_in_8bit \
- --output_dir "./output" \
- --template "alpaca" \
-```
+The training script is in `training_scripts/run_sft_clustered.sh`.
 
 Key arguments:
 
@@ -64,34 +36,13 @@ Key arguments:
 - `fed_alg`: the name of federated learning algorithm
 - `num_clients`/sample_clients: `num_clients` clients in total, `sample_clients` clients for each round
 - `max_steps`: the number of model update steps for one client at each round.
-
-### Federated Value Alignment
-
-The training script is in `training_scripts/run_dpo.sh`.
-
-```
-python main_dpo.py --template "vicuna_v1.1"
-```
-
-Note that the main difference between the usage of `main_sft.py` and `main_dpo.py` lies in the `template` argument. We plan to make them consistent in the future.
-- For SFT, templates are defined in `utils/template.py`
-- For DPO, templates are defined in `utils/conversation.py`
-
-## Evaluation
-
-Evaluation codes are put in `evaluation/` directory. Most of our evaluations follow existing high-incluence open-source repos. Please refer to each sub-directory for the corresponding detailed README and running script.
-
-For example, `evaluation/open_ended/` include open-ended evaluations on three benchmarks, covering MT-Bench, Vicuna Bench, and AdvBench; see [README.md](evaluation/open_ended/README.md).
+- `sim_round`: round that clustering occurs 
+- `n_clusters` number of clusters created 
+- `split_strategy`: dataset split type (IID, multi domains, etc...)
 
 ## Citation
 
 Please cite our paper if you find the repository helpful.
 
 ```
-@article{ye2024openfedllm,
-  title={OpenFedLLM: Training Large Language Models on Decentralized Private Data via Federated Learning},
-  author={Ye, Rui and Wang, Wenhao and Chai, Jingyi and Li, Dihan and Li, Zexi and Xu, Yinda and Du, Yaxin and Wang, Yanfeng and Chen, Siheng},
-  journal={arXiv preprint arXiv:2402.06954},
-  year={2024}
-}
 ```
