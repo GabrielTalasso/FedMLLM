@@ -182,11 +182,9 @@ for round in tqdm(range(fed_args.num_rounds)):
         local_dict_list[client] = copy.deepcopy(get_peft_model_state_dict(model))   # copy is needed!
 
         # ===== Save the model =====
-        if fed_args.fed_alg == 'MTL':
+
+        if (round+1) == fed_args.sim_round:
             trainer.save_model(os.path.join(script_args.output_dir, f"clients_adapters/checkpoint-{round+1}_client{client}"))
-        else:
-            if (round+1) == fed_args.sim_round:
-                trainer.save_model(os.path.join(script_args.output_dir, f"clients_adapters/checkpoint-{round+1}_client{client}"))
 
     # ===== Server aggregates the local models =====
 
@@ -203,8 +201,6 @@ for round in tqdm(range(fed_args.num_rounds)):
 
         # ===== Save the model =====
         if (round+1) % fed_args.save_model_freq == 0:
-            trainer.save_model(os.path.join(script_args.output_dir, f"checkpoint-{round+1}"))
-        if fed_args.fed_alg == 'MTL':
             trainer.save_model(os.path.join(script_args.output_dir, f"checkpoint-{round+1}"))
         
         np.save(os.path.join(script_args.output_dir, "training_loss.npy"), np.array(training_loss))
