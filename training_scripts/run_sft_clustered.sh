@@ -6,8 +6,8 @@ batch_size=16
 batch_size_eval=128
 gradient_accumulation_steps=1
 seq_length=1024
-num_clients=8
-sample_clients=8
+num_clients=10
+sample_clients=10
 lora_r=8
 lora_alpha=16  # twice of lora_r
 lr=5e-4
@@ -25,7 +25,7 @@ sim_alias='clustered'
 
 model_name_or_path='HuggingFaceTB/SmolLM-360M'
 
-gpu='0'
+gpu='7'
 fed_alg="clustered"
 
 CUDA_VISIBLE_DEVICES=$gpu python main_sft_clustered.py \

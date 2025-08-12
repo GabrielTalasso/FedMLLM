@@ -2,7 +2,6 @@ import random
 import numpy as np
 import torch
 from federated_learning.fed_clustered import calculate_similarity, make_clusters, calculate_similarity_pair
-from federated_learning.fed_personalized import get_adapter
 
 def get_clients_this_round(fed_args, script_args, round):
     if (fed_args.fed_alg).startswith('local'):
