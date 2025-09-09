@@ -23,9 +23,9 @@ dataset_sample=400000
 
 sim_alias='clustered'
 
-model_name_or_path='HuggingFaceTB/SmolLM-360M'
+model_name_or_path='HuggingFaceTB/SmolLM-135M'
 
-gpu='7'
+gpu='2'
 fed_alg="clustered"
 
 CUDA_VISIBLE_DEVICES=$gpu python main_sft_clustered.py \
