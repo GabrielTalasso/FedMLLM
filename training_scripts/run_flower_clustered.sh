@@ -21,26 +21,27 @@ dataset_name='CohereForAI/aya_dataset'
 dataset_sample=400000
 
 # Model configuration
-model_name_or_path='HuggingFaceTB/SmolLM-135M'
+#model_name_or_path='HuggingFaceTB/SmolLM-135M'
+model_name_or_path='meta-llama/Llama-3.2-1B'
 
 # Output configuration
 output_dir="output/flower_experiments"
-sim_alias='flower_clustered'
+sim_alias='flower_test_fedavg'
 
 # Federated learning configuration
 fed_alg="clustered"
-sim_round=1  # Round at which clustering happens
-n_clusters=5  # Number of clusters to create
+sim_round=105  # Round at which clustering happens
+n_clusters=1  # Number of clusters to create
 split_strategy="language_clusters"  # How to split data among clients
 train_split=0.8
 evaluation_mode="local"
 
 # Hardware configuration
-gpu='5'
+gpu='6'
 
 # Advanced configuration
 client_resources_cpus=1
-client_resources_gpus=0.1
+client_resources_gpus=1
 
 # Create output directory
 mkdir -p $output_dir

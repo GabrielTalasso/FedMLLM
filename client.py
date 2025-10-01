@@ -21,11 +21,14 @@ from flwr.common import Parameters, parameters_to_ndarrays
 from peft import get_peft_model_state_dict, set_peft_model_state_dict
 from datasets import Dataset
 from transformers import AutoTokenizer
+from flwr.common.typing import NDArrays, Scalar
+from collections import OrderedDict
 
 # Import project utilities
 from utils.utils import cosine_learning_rate, default_evaluation, save_dataset_test
 from federated_learning.split_dataset import get_dataset_this_round
 from federated_learning.fed_local_sft import get_fed_local_sft_trainer
+from flower_utils import get_model_flower
 
 
 class ClusteredFedMLLMClient(NumPyClient):
@@ -34,6 +37,10 @@ class ClusteredFedMLLMClient(NumPyClient):
                  cid: int, 
                  model: torch.nn.Module,
                  tokenizer: AutoTokenizer,
+                 peft_config,
+                 device_map,
+                 quantization_config,
+                 torch_dtype,
                  local_dataset: Dataset,
                  local_dataset_test: Dataset,
                  script_args,
@@ -46,8 +53,7 @@ class ClusteredFedMLLMClient(NumPyClient):
                  output_dir: str = "./output"):
         
         self.cid = cid
-        self.model = model
-        self.tokenizer = tokenizer
+        #self.tokenizer = tokenizer
         self.local_dataset = local_dataset
         self.local_dataset_test = local_dataset_test
         self.script_args = script_args
@@ -62,45 +68,29 @@ class ClusteredFedMLLMClient(NumPyClient):
         # Cluster information - will be set by server
         self.cluster_id = ''
         self.training_losses = []
+
+        self.model, self.tokenizer = get_model_flower(script_args, training_args, peft_config,
+                                        device_map, quantization_config, torch_dtype)
         
         print(f"Client {self.cid} initialized with {len(self.local_dataset)} training samples")
     
-    def get_parameters(self, config: Dict[str, Any]) -> List[np.ndarray]:
-        """Extract model parameters as numpy arrays (LoRA adapter parameters only)."""
+    def get_parameters(self) -> NDArrays:
+        """Return the parameters of the current net."""
+
         state_dict = get_peft_model_state_dict(self.model)
-        # Ensure parameters are on CPU before converting to numpy
-        cpu_params = []
-        for val in state_dict.values():
-            if hasattr(val, 'cpu'):
-                cpu_params.append(val.cpu().detach().numpy())
-            else:
-                cpu_params.append(np.array(val))
-        return cpu_params
-    
-    def set_parameters(self, parameters: List[np.ndarray]) -> None:
-        """Set model parameters from numpy arrays (LoRA adapter parameters only)."""
-        # Get current state dict to preserve structure and device
-        current_state_dict = get_peft_model_state_dict(self.model)
-        
-        if len(parameters) != len(current_state_dict):
-            print(f"Warning: Parameter count mismatch. Expected {len(current_state_dict)}, got {len(parameters)}")
-            return
-        
-        # Create new state dict with proper device placement
-        new_state_dict = {}
-        param_keys = list(current_state_dict.keys())
-        
-        for i, (key, param_array) in enumerate(zip(param_keys, parameters)):
-            # Convert numpy to tensor and move to same device as current parameter
-            current_param = current_state_dict[key]
-            new_tensor = torch.from_numpy(param_array).to(device=current_param.device, dtype=current_param.dtype)
-            new_state_dict[key] = new_tensor
-        
-        # Apply the new state dict
-        set_peft_model_state_dict(self.model, new_state_dict)
-    
+        return [val.cpu().numpy() for _, val in state_dict.items()]
+
+    def set_parameters(self, parameters: NDArrays) -> None:
+        """Change the parameters of the model using the given ones."""
+        peft_state_dict_keys = get_peft_model_state_dict(self.model).keys()
+        params_dict = zip(peft_state_dict_keys, parameters)
+        state_dict = OrderedDict({k: torch.Tensor(v) for k, v in params_dict})
+        set_peft_model_state_dict(self.model, state_dict)
+
     def fit(self, parameters: Parameters, config: Dict[str, Any]) -> Tuple[List[np.ndarray], int, Dict[str, Any]]:
         
+        print('Hello Flower!')
+
         current_round = config["current_round"]
         total_rounds = config["total_rounds"]
         is_clustering_round = config.get("is_clustering_round", False)
@@ -113,18 +103,9 @@ class ClusteredFedMLLMClient(NumPyClient):
             self.cluster_id = cluster_id
             print(f"Client {self.cid} assigned to cluster {cluster_id}")
         
-        # Set model parameters (global or cluster-specific)
-        if parameters is not None:
-            print(f"Client {self.cid}: Received {len(parameters)} parameters")
-            self.set_parameters(parameters)
-            
-            # Verify parameters were set correctly
-            current_params = self.get_parameters(config)
-            param_norms = [np.linalg.norm(p) for p in current_params]
-            print(f"Client {self.cid}: Parameter norms after setting: {param_norms[:3]}...")  # Show first 3 norms
-        else:
-            print(f"Client {self.cid}: No parameters received!")
-            
+        
+        self.set_parameters(parameters)
+
         self.model.to(self.device)
         
         # Get subset of data for this round
@@ -144,6 +125,15 @@ class ClusteredFedMLLMClient(NumPyClient):
             self.script_args.output_dir, f"client_{self.cid}_round_{current_round}"
         )
         
+        print("Model parameters before training:")
+        c = 0
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                print(f"Param: {name}, Value: {param.data}")
+            c += 1
+            if c >= 10:  # Print only first 10 parameters for brevity
+                break
+
         # Create federated SFT trainer
         # This mimics the trainer creation in main_sft_clustered.py
         trainer = get_fed_local_sft_trainer(
@@ -165,6 +155,14 @@ class ClusteredFedMLLMClient(NumPyClient):
         
         # Train the model
         results = trainer.train()
+        print("Model parameters after training:")
+        c = 0
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                print(f"Param: {name}, Value: {param.data}")
+            c += 1
+            if c >= 10:  # Print only first 10 parameters for brevity
+                break
         self.training_losses.append(results.training_loss)
         
         # Save adapter for clustering analysis if this is the clustering round
@@ -172,15 +170,7 @@ class ClusteredFedMLLMClient(NumPyClient):
             self._save_adapter_for_clustering(current_round, trainer)
         
         # Extract updated parameters (LoRA adapter state dict)
-        updated_parameters = self.get_parameters(config)
-        
-        # Verify we actually have parameters to return
-        if not updated_parameters:
-            print(f"Warning: Client {self.cid} has no parameters to return!")
-        else:
-            # Print parameter magnitudes for debugging
-            param_norms = [np.linalg.norm(p) for p in updated_parameters]
-            print(f"Client {self.cid}: Returning {len(updated_parameters)} parameters with norms: {param_norms[:3]}...")
+        updated_parameters = self.get_parameters()
         
         dataset_size = len(sub_dataset)
         
@@ -201,20 +191,24 @@ class ClusteredFedMLLMClient(NumPyClient):
         
         print(f"Client {self.cid}: Starting evaluation for round {current_round}")
         
-        # Set model parameters
-        if parameters is not None:
-            self.set_parameters(parameters)
-            print(f"Client {self.cid}: Applied parameters for evaluation")
-        else:
-            print(f"Client {self.cid}: Warning - No parameters received for evaluation!")
+        self.set_parameters(parameters)
+        print(f"Client {self.cid}: Applied parameters for evaluation")
             
         self.model.to(self.device)
         
         # Ensure model is in eval mode
         self.model.eval()
         
+        print('Model being used for evaluation:')
+        c = 0
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                print(f"Param: {name}, Value: {param.data}")
+            c += 1
+            if c >= 10:  # Print only first 10 parameters for brevity
+                break
+
         # Prepare test dataset
-        # This mimics the test dataset preparation in main_sft_clustered.py
         sub_dataset_test = self.local_dataset_test.shuffle(seed=current_round)
         max_eval_size = getattr(self.script_args, 'max_eval_size', 100)
         if max_eval_size < len(sub_dataset_test):
@@ -238,14 +232,11 @@ class ClusteredFedMLLMClient(NumPyClient):
                 cluster_id=self.cluster_id
             )
         
-            # Extract loss (for simplicity, we'll use a dummy loss since default_evaluation returns ROUGE scores)
+            # Extract loss 
             loss = eval_results.get('eval_loss', 0.0) if isinstance(eval_results, dict) else 0.0
         
         else:
             loss = 0.0
-
-        # Return model to training mode
-        self.model.train()
 
         metrics = {
             "eval_loss": loss,
@@ -309,6 +300,10 @@ def create_client_fn(experiment_config):
             cid=cid,
             model=model_copy,
             tokenizer=experiment_config['tokenizer'],
+            peft_config=experiment_config['peft_config'],
+            device_map=experiment_config['device_map'],
+            quantization_config=experiment_config['quantization_config'],
+            torch_dtype=experiment_config['torch_dtype'],
             local_dataset=local_dataset,
             local_dataset_test=local_dataset_test,
             script_args=experiment_config['script_args'],

@@ -46,6 +46,7 @@ class ClusteredFedMLLMStrategy(FedAvg):
     """
     
     def __init__(self, 
+                 global_model,
                  initial_parameters: Parameters,
                  peft_state_dict,
                  num_clients: int,
@@ -76,7 +77,8 @@ class ClusteredFedMLLMStrategy(FedAvg):
         self.current_round = 0
         self.client_clusters = {}  
         self.cluster_models = {}  
-        self.global_model = initial_parameters 
+        self.global_model_structure = global_model
+        self.global_model = initial_parameters
         self.cluster_assignments = None  
         self.peft_state_dict = peft_state_dict
         
@@ -92,6 +94,10 @@ class ClusteredFedMLLMStrategy(FedAvg):
     def configure_fit(self, server_round: int, parameters: Parameters, client_manager) -> List[Tuple[Any, FitIns]]:
 
         self.current_round = server_round
+
+        if server_round == 1:
+            self.client_idx2id = {i: int(client) for i, client in enumerate(client_manager.all())}
+            self.client_id2idx = {int(client): i for i, client in enumerate(client_manager.all())}
         
         if server_round == self.sim_round:
             # For clustering round, include all clients
@@ -125,13 +131,13 @@ class ClusteredFedMLLMStrategy(FedAvg):
             print(f"Round {server_round}: Post-clustering phase - sending cluster-specific models")
             for client in clients:
                 client_id = int(client.cid)
-                cluster_id = self.client_clusters.get(client_id, 0)
-                cluster_params = self.cluster_models.get(cluster_id, self.global_model)
+                cluster_id = self.client_clusters[client_id]
+                cluster_params = self.cluster_models[cluster_id]
+
+                #client_config = config.copy()
+                #client_config["cluster_id"] = cluster_id
                 
-                client_config = config.copy()
-                client_config["cluster_id"] = cluster_id
-                
-                fit_configurations.append((client, FitIns(cluster_params, client_config)))
+                fit_configurations.append((client, FitIns(cluster_params, config)))
         
         return fit_configurations
     
@@ -153,9 +159,9 @@ class ClusteredFedMLLMStrategy(FedAvg):
         else:
             # Send cluster-specific models for evaluation
             for client in clients:
-                client_id = int(client.cid)
-                cluster_id = self.client_clusters.get(client_id, 0)
-                cluster_params = self.cluster_models.get(cluster_id, self.global_model)
+                client_idx = int(client.cid)
+                cluster_id = self.client_clusters[client_idx]
+                cluster_params = self.cluster_models[cluster_id]
                 evaluate_configurations.append((client, EvaluateIns(cluster_params, config)))
         
         return evaluate_configurations
@@ -218,42 +224,33 @@ class ClusteredFedMLLMStrategy(FedAvg):
         return None
     
     def _aggregate_fedavg(self, results: List[Tuple[Any, FitRes]]) -> Tuple[Parameters, Dict[str, Any]]:
-        """Improved FedAvg aggregation with better parameter handling."""
-        if not results:
-            print("Warning: No results to aggregate!")
-            return self.global_model, {}
+
+        print(f"\n=== FedAvg Aggregation Phase (Round {self.current_round}) ===")
+        print(f"\n=== FedAvg Aggregation Phase (Round {self.current_round}) ===")
+        print(f"\n=== FedAvg Aggregation Phase (Round {self.current_round}) ===")
+        print(f"\n=== FedAvg Aggregation Phase (Round {self.current_round}) ===")
+        print(f"\n=== FedAvg Aggregation Phase (Round {self.current_round}) ===")
 
         # Extract weights and sample sizes
         weights_list = [parameters_to_ndarrays(fit_res.parameters) for _, fit_res in results]
         sample_sizes = [fit_res.num_examples for _, fit_res in results]
         
-        print(f"Aggregating {len(results)} client results with sample sizes: {sample_sizes}")
-        
-        # Verify all clients have same parameter structure
-        if len(set(len(w) for w in weights_list)) > 1:
-            print("Warning: Clients have different parameter counts!")
-            param_counts = [len(w) for w in weights_list]
-            print(f"Parameter counts: {param_counts}")
-        
         # Perform weighted averaging
         total_samples = sum(sample_sizes)
-        if total_samples == 0:
-            print("Warning: Total samples is 0!")
-            return self.global_model, {}
-            
         aggregated_weights = []
-        
+
+        print('Weights received:')
+        for i, weights in enumerate(weights_list):
+            c = 0
+            for name, param in zip(self.peft_state_dict.keys(), weights):
+                print(f"Client {i} - Param: {name}, Value: {param}")
+                c += 1
+                if c >= 5: 
+                    break
+
         for i in range(len(weights_list[0])):
-            # Compute weighted average for parameter i
-            weighted_sum = np.zeros_like(weights_list[0][i])
-            for weights, size in zip(weights_list, sample_sizes):
-                weighted_sum += weights[i] * (size / total_samples)
-            aggregated_weights.append(weighted_sum)
-        
-        # Verify aggregation didn't create NaN or inf values
-        for i, param in enumerate(aggregated_weights):
-            if np.isnan(param).any() or np.isinf(param).any():
-                print(f"Warning: Parameter {i} contains NaN or inf values after aggregation!")
+            weighted_sum = sum(weights[i] * size for weights, size in zip(weights_list, sample_sizes))
+            aggregated_weights.append(weighted_sum / total_samples)
         
         # Update global model
         self.global_model = ndarrays_to_parameters(aggregated_weights)
@@ -261,17 +258,21 @@ class ClusteredFedMLLMStrategy(FedAvg):
         # Save the updated global model
         self._save_global_model(self.current_round)
         
-        # Compute parameter change magnitude for debugging
-        param_norms = [np.linalg.norm(p) for p in aggregated_weights]
-        print(f"Aggregated parameter norms: {param_norms[:3]}...")  # Show first 3
-        
         metrics = {
             "aggregation_type": "fedavg",
             "num_clients": len(results),
-            "total_samples": total_samples,
-            "param_norms": param_norms[:5]  # Store first 5 for debugging
+            "total_samples": total_samples
         }
-        
+
+        print('Global model params After FedAvg:')
+        c = 0
+        for name, param in zip(self.peft_state_dict.keys(), aggregated_weights):
+            if c < 5:
+                print(f"Param: {name}, Value: {param}")
+                c += 1
+            else: 
+                break
+    
         return self.global_model, metrics
     
     def _aggregate_with_clustering(self, results: List[Tuple[Any, FitRes]]) -> Tuple[Parameters, Dict[str, Any]]:
@@ -294,13 +295,12 @@ class ClusteredFedMLLMStrategy(FedAvg):
             round=self.current_round,
             save_dendrogram=True,
             path=self.output_dir
-            
         )
         
         self.cluster_assignments = cluster_assignments
         
         for client_idx in range(self.num_clients):
-            self.client_clusters[client_idx] = cluster_assignments[client_idx] - 1
+            self.client_clusters[self.client_idx2id[client_idx]] = cluster_assignments[client_idx] - 1
         
         print(f"Cluster assignments: {dict(self.client_clusters)}")
 
@@ -325,8 +325,8 @@ class ClusteredFedMLLMStrategy(FedAvg):
         cluster_results = {}
         for client, fit_res in results:
             client_id = int(client.cid)
-            cluster_id = self.client_clusters.get(client_id, 0)
-            
+            cluster_id = self.client_clusters[client_id]
+
             if cluster_id not in cluster_results:
                 cluster_results[cluster_id] = []
             cluster_results[cluster_id].append((client, fit_res))
@@ -344,20 +344,14 @@ class ClusteredFedMLLMStrategy(FedAvg):
                 sample_sizes = [fit_res.num_examples for _, fit_res in cluster_res]
                 
                 total_samples = sum(sample_sizes)
-                if total_samples == 0:
-                    print(f"Warning: Cluster {cluster_id} has 0 total samples!")
-                    updated_cluster_models[cluster_id] = self.cluster_models.get(cluster_id, self.global_model)
-                    continue
-                    
                 aggregated_weights = []
                 
                 for i in range(len(weights_list[0])):
-                    weighted_sum = np.zeros_like(weights_list[0][i])
-                    for weights, size in zip(weights_list, sample_sizes):
-                        weighted_sum += weights[i] * (size / total_samples)
-                    aggregated_weights.append(weighted_sum)
+                    weighted_sum = sum(weights[i] * size for weights, size in zip(weights_list, sample_sizes))
+                    aggregated_weights.append(weighted_sum / total_samples)
                 
                 updated_cluster_models[cluster_id] = ndarrays_to_parameters(aggregated_weights)
+                #updated_cluster_models[cluster_id] = aggregated_weights
                 cluster_metrics[cluster_id] = {
                     "num_clients": len(cluster_res),
                     "total_samples": total_samples
@@ -370,7 +364,7 @@ class ClusteredFedMLLMStrategy(FedAvg):
                 print(f"Cluster {cluster_id}: no clients, keeping previous model")
         
         # Update cluster models
-        self.cluster_models.update(updated_cluster_models)
+        self.cluster_models = updated_cluster_models.copy()
         
         # Save updated cluster models
         self._save_cluster_models(self.current_round)
@@ -394,14 +388,13 @@ class ClusteredFedMLLMStrategy(FedAvg):
         # Group client results by cluster
         cluster_groups = {}
         for i, (client, fit_res) in enumerate(results):
-            client_id = int(client.cid)
-            if client_id < len(cluster_assignments):
-                cluster_id = cluster_assignments[client_id] - 1  # Convert to 0-indexed
-                
-                if cluster_id not in cluster_groups:
-                    cluster_groups[cluster_id] = []
-                cluster_groups[cluster_id].append(fit_res)
-        
+            client_idx = self.client_id2idx[int(client.cid)]
+            cluster_id = cluster_assignments[client_idx] - 1  # Convert to 0-indexed
+
+            if cluster_id not in cluster_groups:
+                cluster_groups[cluster_id] = []
+            cluster_groups[cluster_id].append(fit_res)
+    
         # Create aggregated model for each cluster
         for cluster_id, cluster_results in cluster_groups.items():
             if cluster_results:
@@ -419,14 +412,7 @@ class ClusteredFedMLLMStrategy(FedAvg):
                 cluster_models[cluster_id] = ndarrays_to_parameters(aggregated_weights)
                 print(f"Created model for cluster {cluster_id} with {len(cluster_results)} clients")
         
-        # Fill in missing clusters with global model
-        for cluster_id in range(self.n_clusters):
-            if cluster_id not in cluster_models:
-                cluster_models[cluster_id] = self.global_model
-                print(f"Using global model for empty cluster {cluster_id}")
-        
         return cluster_models
-
 
     def _save_initial_global_model(self) -> None:
         """Save the initial global model."""
@@ -499,7 +485,7 @@ class ClusteredFedMLLMStrategy(FedAvg):
             
         Returns:
             Dictionary mapping client_id to parameter arrays
-        """
+        """ 
         client_adapters = {}
         adapter_dir = os.path.join(self.output_dir, "client_adapters", f"round_{round_idx}")
         
@@ -548,6 +534,7 @@ def create_server_strategy(experiment_config: Dict[str, Any]) -> ClusteredFedMLL
     
     # Create strategy with clustering configuration
     strategy = ClusteredFedMLLMStrategy(
+        global_model = experiment_config['model'],
         initial_parameters=initial_parameters,
         peft_state_dict=peft_state_dict,
         num_clients=experiment_config['fed_args'].num_clients,

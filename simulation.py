@@ -24,11 +24,15 @@ from utils import *
 from utils.utils import default_evaluation, save_dataset_test, cosine_learning_rate
 from federated_learning.split_dataset import split_dataset, get_dataset_this_round
 from config import get_config, save_config, get_model_config, get_training_args
+from flower_utils import get_model_flower
 
 # Import our custom components
 from client import create_client_fn
 from server import create_server_strategy
 
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import get_peft_model, prepare_model_for_kbit_training
+from trl import DataCollatorForCompletionOnlyLM
 
 def setup_experiment(config_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
@@ -36,15 +40,15 @@ def setup_experiment(config_overrides: Optional[Dict[str, Any]] = None) -> Dict[
 
     # Update script_args settings with sensible defaults for testing
     if not config_overrides or 'max_steps' not in config_overrides:
-        script_args.max_steps = 50  # Increased from 10 to 50 for better learning
+        script_args.max_steps = 10
     if not config_overrides or 'num_train_epochs' not in config_overrides:
         script_args.num_train_epochs = 1
     if not config_overrides or 'learning_rate' not in config_overrides:
-        script_args.learning_rate = 1e-3  # Increased from 5e-4 to 1e-3
+        script_args.learning_rate = 5e-4
     if not config_overrides or 'batch_size' not in config_overrides:
-        script_args.batch_size = 8  # Reduced from 16 to 8 for more gradient updates
+        script_args.batch_size = 16
     if not config_overrides or 'gradient_accumulation_steps' not in config_overrides:
-        script_args.gradient_accumulation_steps = 2  # Increased from 1 to 2
+        script_args.gradient_accumulation_steps = 1
     if not config_overrides or 'seq_length' not in config_overrides:
         script_args.seq_length = 1024
     if not config_overrides or 'dataset_name' not in config_overrides:
@@ -78,7 +82,7 @@ def setup_experiment(config_overrides: Optional[Dict[str, Any]] = None) -> Dict[
     if not config_overrides or 'split_strategy' not in config_overrides:
         fed_args.split_strategy = "language_clusters"
     if not config_overrides or 'sim_round' not in config_overrides:
-        fed_args.sim_round = 3  # Changed from 1 to 3 to allow more pre-clustering learning
+        fed_args.sim_round = 1
     if not config_overrides or 'n_clusters' not in config_overrides:
         fed_args.n_clusters = 5
     if not config_overrides or 'evaluation_rounds' not in config_overrides:
@@ -116,38 +120,8 @@ def setup_experiment(config_overrides: Optional[Dict[str, Any]] = None) -> Dict[
     
     device_map, quantization_config, torch_dtype = get_model_config(script_args)
     
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    from peft import get_peft_model, prepare_model_for_kbit_training
-    from trl import DataCollatorForCompletionOnlyLM
-    
-    model = AutoModelForCausalLM.from_pretrained(
-        script_args.model_name_or_path,
-        quantization_config=quantization_config,
-        device_map=device_map,
-        trust_remote_code=script_args.trust_remote_code,
-        torch_dtype=torch_dtype,
-    )
-    
-    if script_args.load_in_8bit or script_args.load_in_4bit:
-        model = prepare_model_for_kbit_training(
-            model, use_gradient_checkpointing=training_args.gradient_checkpointing
-        )
-
-    model = get_peft_model(model, peft_config)
-    model.print_trainable_parameters()
-    model.config.use_cache = False
-    
-    if training_args.gradient_checkpointing:
-        model.enable_input_require_grads()
-    
-    tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path, use_fast=False, padding_side="left")
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    if tokenizer.eos_token == tokenizer.unk_token or tokenizer.pad_token == tokenizer.eos_token:
-        tokenizer.add_special_tokens({'pad_token': '<pad>'})
-    
-    model.resize_token_embeddings(len(tokenizer))
+    model, tokenizer = get_model_flower(script_args, training_args, peft_config,
+                                        device_map, quantization_config, torch_dtype)
     
     formatting_prompts_func, response_template = get_formatting_prompts_func(script_args.template, tokenizer.eos_token)
     if response_template:
@@ -177,6 +151,9 @@ def setup_experiment(config_overrides: Optional[Dict[str, Any]] = None) -> Dict[
         'data_collator': data_collator,
         'packing': packing,
         'peft_config': peft_config,
+        'device_map': device_map,
+        'quantization_config': quantization_config,
+        'torch_dtype': torch_dtype,
         'device': device
     }
     
@@ -341,6 +318,7 @@ def main():
     parser.add_argument("--eval_batch_size", type=int, default=128, help="Evaluation batch size")
     parser.add_argument("--evaluation_mode", type=str, default="local", help="Evaluation mode")
     
+    
     # Simulation configuration
     parser.add_argument("--sim_alias", type=str, default="flower_clustered", help="Simulation alias")
     parser.add_argument("--client_resources_cpus", type=int, default=1, help="CPU resources per client")
@@ -399,6 +377,8 @@ def main():
         # Run actual simulation
         history = run_flower_simulation_actual(simulation_components)
         if history:
+            with open(os.path.join(args.output_dir, "simulation_history.txt"), "w") as f:
+                f.write(str(history))
             print(f"\nSimulation completed. Results saved to: {args.output_dir}")
 
 if __name__ == "__main__":
